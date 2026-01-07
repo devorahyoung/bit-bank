@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-TestApplication<my-bank>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.poalim.mybank.TestApplication",
+            "projectName": "my-bank",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}
