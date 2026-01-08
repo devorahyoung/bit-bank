@@ -1,17 +1,24 @@
 package com.poalim.mybank.account;
 
+import com.poalim.mybank.config.KafkaTopicsConfiguration;
+import com.poalim.mybank.events.TransactionCompletedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -25,6 +32,9 @@ class AccountServiceTest {
 
     @Mock
     private TransferRecordRepository transferRecordRepository;
+
+    @Mock
+    private KafkaTemplate<String, TransactionCompletedEvent> kafkaTemplate;
 
     @InjectMocks
     private AccountService accountService;
@@ -179,6 +189,13 @@ class AccountServiceTest {
         when(transferRecordRepository.save(any(TransferRecord.class))).thenReturn(transferRecord);
         when(accountRepository.save(any(Account.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
+
+        // Mock Kafka send operation
+        CompletableFuture<SendResult<String, TransactionCompletedEvent>> future = new CompletableFuture<>();
+        future.complete(new SendResult<>(null, null));
+        when(kafkaTemplate.send(anyString(), anyString(), any(TransactionCompletedEvent.class)))
+                .thenReturn(future);
+
         // Act
         TransferResponse response = accountService.transfer(request);
 
@@ -187,9 +204,12 @@ class AccountServiceTest {
         assertThat(response.getTransferId()).isEqualTo(transferRecord.getId().toString());
         verify(accountRepository, times(2)).save(any(Account.class));
         verify(transferRecordRepository, times(2)).save(any(TransferRecord.class));
+        verify(kafkaTemplate).send(
+                eq(KafkaTopicsConfiguration.TRANSACTION_TOPIC),
+                any(String.class),
+                any(TransactionCompletedEvent.class)
+        );
     }
-
-
 
     @Test
     void transfer_WithInsufficientFunds_ShouldThrowException() {

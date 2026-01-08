@@ -1,7 +1,12 @@
 package com.poalim.mybank.account;
 
 import com.poalim.mybank.audit.Auditable;
+import com.poalim.mybank.config.KafkaTopicsConfiguration;
+import com.poalim.mybank.events.DepositCompletedEvent;
+import com.poalim.mybank.events.TransactionCompletedEvent;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -12,15 +17,20 @@ import java.util.List;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class AccountService {
 
     private final AccountRepository accountRepository;
     private final TransferRecordRepository transferRecordRepository;
+    private final KafkaTemplate<String, TransactionCompletedEvent> kafkaTemplate;
+    private final KafkaTemplate<String, DepositCompletedEvent> depositKafkaTemplate;
 
     @Autowired
-    public AccountService(AccountRepository accountRepository, TransferRecordRepository transferRecordRepository) {
+    public AccountService(AccountRepository accountRepository, TransferRecordRepository transferRecordRepository, KafkaTemplate<String, TransactionCompletedEvent> kafkaTemplate, KafkaTemplate<String, DepositCompletedEvent> depositKafkaTemplate) {
         this.accountRepository = accountRepository;
         this.transferRecordRepository = transferRecordRepository;
+        this.kafkaTemplate = kafkaTemplate;
+        this.depositKafkaTemplate = depositKafkaTemplate;
     }
 
     @Transactional
@@ -96,6 +106,28 @@ public class AccountService {
 
         account.setBalance(account.getBalance().add(amount));
         Account savedAccount = accountRepository.save(account);
+
+        // Create and send the deposit event
+        String transactionId = UUID.randomUUID().toString();
+        DepositCompletedEvent event = new DepositCompletedEvent(
+                transactionId,
+                id.toString(),
+                amount,
+                LocalDateTime.now()
+        );
+
+        try {
+            depositKafkaTemplate.send(KafkaTopicsConfiguration.DEPOSIT_TOPIC,
+                            event.transactionId(),
+                            event)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("Failed to send deposit event: {}", ex.getMessage());
+                        }
+                    });
+        } catch (Exception e) {
+            log.error("Failed to send deposit event: {}", e.getMessage());
+        }
 
         return new AccountResponse(
                 savedAccount.getId(),
@@ -219,6 +251,29 @@ public class AccountService {
             transferRecord.setStatus(TransferStatus.COMPLETED);
             transferRecord.setCompletedAt(LocalDateTime.now());
             transferRecordRepository.save(transferRecord);
+
+            TransactionCompletedEvent event = new TransactionCompletedEvent(
+                    transferRecord.getId().toString(),
+                    request.getFromAccountId().toString(),
+                    request.getToAccountId().toString(),
+                    request.getAmount(),
+                    LocalDateTime.now()
+            );
+
+            // Send the event
+            try {
+                kafkaTemplate.send(KafkaTopicsConfiguration.TRANSACTION_TOPIC,
+                                event.transactionId(),
+                                event)
+                        .whenComplete((result, ex) -> {
+                            if (ex != null) {
+                                log.error("Failed to send transaction event: {}", ex.getMessage());
+                            }
+                        });
+            } catch (Exception e) {
+                log.error("Failed to send transaction event: {}", e.getMessage());
+            }
+
 
             return new TransferResponse(
                     transferRecord.getId().toString(),
